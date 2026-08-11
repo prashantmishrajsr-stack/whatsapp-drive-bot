@@ -85,17 +85,6 @@ async function searchFilesByCode(queryCode) {
   return matches;
 }
 
-// ─── Helper to resolve best recipient JID ─────────────────────────────────
-function getRecipientJid(msg) {
-  if (msg.key.remoteJidAlt && msg.key.remoteJidAlt.endsWith('@s.whatsapp.net')) {
-    return msg.key.remoteJidAlt;
-  }
-  if (msg.key.participant && msg.key.participant.endsWith('@s.whatsapp.net')) {
-    return msg.key.participant;
-  }
-  return msg.key.remoteJid;
-}
-
 // ─── Function to clear auth session and force new QR ─────────────────────
 async function logoutAndReset() {
   console.log('🔄 Resetting session and generating new QR Code...');
@@ -208,7 +197,10 @@ async function startBot() {
   const sock = makeWASocket({
     auth: state,
     logger: pino({ level: 'silent' }),
-    printQRInTerminal: false
+    printQRInTerminal: false,
+    browser: ['Mac OS', 'Chrome', '121.0.0'],
+    markOnlineOnConnect: true,
+    syncFullHistory: false
   });
 
   currentSock = sock;
@@ -257,9 +249,12 @@ async function startBot() {
       const queryCode = text.trim();
       if (!queryCode) continue;
 
-      console.log(`📩 Received message (KEY: ${JSON.stringify(msg.key)}): "${queryCode}"`);
+      console.log(`📩 Received message from ${remoteJid}: "${queryCode}"`);
 
       try {
+        // Mark message as read
+        try { await sock.readMessages([msg.key]); } catch (e) {}
+
         const results = await searchFilesByCode(queryCode);
         let reply = '';
 
@@ -276,26 +271,12 @@ async function startBot() {
           reply = lines.join('\n');
         }
 
-        const targetJid = getRecipientJid(msg);
-        console.log(`📤 Sending reply to: ${targetJid}`);
-        await sock.sendMessage(targetJid, { text: reply }, { quoted: msg });
-
-        if (targetJid !== remoteJid) {
-          try {
-            console.log(`📤 Sending backup reply to: ${remoteJid}`);
-            await sock.sendMessage(remoteJid, { text: reply }, { quoted: msg });
-          } catch (e) {
-            console.log(`Backup send info: ${e.message}`);
-          }
-        }
-
-        console.log(`✅ Successfully sent reply for message: "${queryCode}"`);
+        // Send reply directly to the chat remoteJid
+        console.log(`📤 Sending message to: ${remoteJid}`);
+        await sock.sendMessage(remoteJid, { text: reply }, { quoted: msg });
+        console.log(`✅ Successfully delivered reply to ${remoteJid}`);
       } catch (err) {
-        console.error('❌ Drive Search Error:', err);
-        const targetJid = getRecipientJid(msg);
-        await sock.sendMessage(targetJid, {
-          text: '❌ An error occurred while searching Google Drive. Please check logs.'
-        }, { quoted: msg });
+        console.error('❌ Drive Search / Send Error:', err);
       }
     }
   });
