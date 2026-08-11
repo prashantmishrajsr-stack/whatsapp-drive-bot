@@ -2,9 +2,12 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = requi
 const { google } = require('googleapis');
 const http = require('http');
 const pino = require('pino');
+const fs = require('fs');
+const path = require('path');
 
 let latestQR = null;
 let isConnected = false;
+let currentSock = null;
 
 // ─── Google Drive Helper ───────────────────────────────────────────────────
 function getDriveService() {
@@ -93,10 +96,42 @@ function getRecipientJid(msg) {
   return msg.key.remoteJid;
 }
 
+// ─── Function to clear auth session and force new QR ─────────────────────
+async function logoutAndReset() {
+  console.log('🔄 Resetting session and generating new QR Code...');
+  isConnected = false;
+  latestQR = null;
+  if (currentSock) {
+    try { currentSock.logout(); } catch (e) {}
+    try { currentSock.end(); } catch (e) {}
+  }
+  const authPath = path.join(__dirname, 'auth_info');
+  if (fs.existsSync(authPath)) {
+    fs.rmSync(authPath, { recursive: true, force: true });
+  }
+  setTimeout(startBot, 2000);
+}
+
 // ─── Web Server for Displaying Clean QR Code ──────────────────────────────
 const PORT = process.env.PORT || 8000;
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+
+  if (req.url === '/reset' || req.url === '/logout') {
+    logoutAndReset();
+    return res.end(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Resetting WhatsApp...</title>
+        <meta http-equiv="refresh" content="5;url=/">
+      </head>
+      <body style="font-family: sans-serif; text-align: center; padding: 50px; background: #0f172a; color: white;">
+        <h2>🔄 Resetting WhatsApp session... Please wait 5 seconds.</h2>
+      </body>
+      </html>
+    `);
+  }
 
   if (isConnected) {
     res.end(`
@@ -108,12 +143,15 @@ const server = http.createServer((req, res) => {
           body { font-family: sans-serif; text-align: center; padding: 50px; background: #0f172a; color: white; }
           .card { background: #1e293b; padding: 40px; border-radius: 16px; display: inline-block; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
           h1 { color: #22c55e; }
+          a.btn { display: inline-block; margin-top: 20px; padding: 10px 20px; background: #ef4444; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; }
+          a.btn:hover { background: #dc2626; }
         </style>
       </head>
       <body>
         <div class="card">
           <h1>✅ WhatsApp Bot Connected & Active!</h1>
           <p>Your bot is logged in and ready to receive messages.</p>
+          <a href="/reset" class="btn">🔄 Disconnect & Scan New QR Code</a>
         </div>
       </body>
       </html>
@@ -152,7 +190,7 @@ const server = http.createServer((req, res) => {
         <meta http-equiv="refresh" content="3">
       </head>
       <body style="font-family: sans-serif; text-align: center; padding: 50px; background: #0f172a; color: white;">
-        <h2>⏳ Starting WhatsApp Bot... Please wait.</h2>
+        <h2>⏳ Starting WhatsApp Bot... Generating QR Code...</h2>
       </body>
       </html>
     `);
@@ -173,6 +211,8 @@ async function startBot() {
     printQRInTerminal: false
   });
 
+  currentSock = sock;
+
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', (update) => {
@@ -181,7 +221,7 @@ async function startBot() {
     if (qr) {
       latestQR = qr;
       isConnected = false;
-      console.log('📱 New QR code generated. Open the Railway Web URL to scan!');
+      console.log('📱 New QR code generated. Open Railway Web URL to scan!');
     }
 
     if (connection === 'close') {
