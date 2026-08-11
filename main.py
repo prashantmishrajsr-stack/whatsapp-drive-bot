@@ -24,38 +24,39 @@ async def root():
 # ─── Webhook ──────────────────────────────────────────────────────────────────
 @app.post("/webhook")
 async def webhook(request: Request):
-    """
-    Green API sends incoming WhatsApp messages to this endpoint as JSON.
-    
-    Expected payload structure (Green API format):
-    {
-        "typeWebhook": "incomingMessageReceived",
-        "senderData": { "chatId": "91XXXXXXXXXX@c.us", "sender": "..." },
-        "messageData": { "textMessageData": { "textMessage": "P205402" } }
-    }
-    """
     try:
         body = await request.json()
         logger.info(f"Incoming webhook payload: {body}")
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
-    # ── Only process incoming text messages ──────────────────────────────────
+    # ── Only process incoming messages ──────────────────────────────────
     webhook_type = body.get("typeWebhook")
-    if webhook_type != "incomingMessageReceived":
+    if webhook_type not in ["incomingMessageReceived", "outgoingAPIMessageReceived", "outgoingMessageReceived"]:
         logger.info(f"Ignored webhook type: {webhook_type}")
-        return JSONResponse({"status": "ignored", "reason": "not an incoming message"})
+        return JSONResponse({"status": "ignored", "reason": f"type {webhook_type} ignored"})
 
     # ── Extract sender and message text ─────────────────────────────────────
     sender_data = body.get("senderData", {})
     chat_id = sender_data.get("chatId", "")
 
     message_data = body.get("messageData", {})
-    text_data = message_data.get("textMessageData", {})
-    user_message = text_data.get("textMessage", "").strip()
+    
+    # Try all possible places WhatsApp stores message text
+    user_message = ""
+    if "textMessageData" in message_data:
+        user_message = message_data["textMessageData"].get("textMessage", "")
+    if not user_message and "extendedTextMessageData" in message_data:
+        user_message = message_data["extendedTextMessageData"].get("text", "")
+    if not user_message and "extendedTextMessageData" in message_data:
+        user_message = message_data["extendedTextMessageData"].get("textMessage", "")
+    if not user_message and "fileMessageData" in message_data:
+        user_message = message_data["fileMessageData"].get("caption", "")
+
+    user_message = user_message.strip()
 
     if not chat_id or not user_message:
-        logger.warning("Missing chatId or message text, skipping.")
+        logger.warning(f"Skipping: chatId='{chat_id}', message='{user_message}'")
         return JSONResponse({"status": "skipped"})
 
     logger.info(f"Message from {chat_id}: '{user_message}'")
