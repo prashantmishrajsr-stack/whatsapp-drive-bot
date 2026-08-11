@@ -82,6 +82,17 @@ async function searchFilesByCode(queryCode) {
   return matches;
 }
 
+// ─── Helper to resolve best recipient JID ─────────────────────────────────
+function getRecipientJid(msg) {
+  if (msg.key.remoteJidAlt && msg.key.remoteJidAlt.endsWith('@s.whatsapp.net')) {
+    return msg.key.remoteJidAlt;
+  }
+  if (msg.key.participant && msg.key.participant.endsWith('@s.whatsapp.net')) {
+    return msg.key.participant;
+  }
+  return msg.key.remoteJid;
+}
+
 // ─── Web Server for Displaying Clean QR Code ──────────────────────────────
 const PORT = process.env.PORT || 8000;
 const server = http.createServer((req, res) => {
@@ -206,7 +217,7 @@ async function startBot() {
       const queryCode = text.trim();
       if (!queryCode) continue;
 
-      console.log(`📩 Received message from ${remoteJid} (fromMe: ${msg.key.fromMe}): "${queryCode}"`);
+      console.log(`📩 Received message (KEY: ${JSON.stringify(msg.key)}): "${queryCode}"`);
 
       try {
         const results = await searchFilesByCode(queryCode);
@@ -225,12 +236,24 @@ async function startBot() {
           reply = lines.join('\n');
         }
 
-        // Quoting the original message ensures WhatsApp routes the reply directly into the conversation thread
-        await sock.sendMessage(remoteJid, { text: reply }, { quoted: msg });
-        console.log(`📤 Successfully sent quoted reply to ${remoteJid}`);
+        const targetJid = getRecipientJid(msg);
+        console.log(`📤 Sending reply to: ${targetJid}`);
+        await sock.sendMessage(targetJid, { text: reply }, { quoted: msg });
+
+        if (targetJid !== remoteJid) {
+          try {
+            console.log(`📤 Sending backup reply to: ${remoteJid}`);
+            await sock.sendMessage(remoteJid, { text: reply }, { quoted: msg });
+          } catch (e) {
+            console.log(`Backup send info: ${e.message}`);
+          }
+        }
+
+        console.log(`✅ Successfully sent reply for message: "${queryCode}"`);
       } catch (err) {
         console.error('❌ Drive Search Error:', err);
-        await sock.sendMessage(remoteJid, {
+        const targetJid = getRecipientJid(msg);
+        await sock.sendMessage(targetJid, {
           text: '❌ An error occurred while searching Google Drive. Please check logs.'
         }, { quoted: msg });
       }
