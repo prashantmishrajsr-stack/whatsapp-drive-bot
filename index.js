@@ -19,12 +19,17 @@ function getDriveService() {
       ? JSON.parse(serviceAccountJson) 
       : serviceAccountJson;
   } catch (e) {
-    throw new Error('Invalid GOOGLE_SERVICE_ACCOUNT_JSON formatting.');
+    throw new Error(`Invalid GOOGLE_SERVICE_ACCOUNT_JSON formatting: ${e.message}`);
   }
+
+  // Ensure private_key handles linebreaks correctly
+  const privateKey = credentials.private_key 
+    ? credentials.private_key.replace(/\\n/g, '\n') 
+    : '';
 
   const auth = new google.auth.JWT({
     email: credentials.client_email,
-    key: credentials.private_key,
+    key: privateKey,
     scopes: ['https://www.googleapis.com/auth/drive.readonly']
   });
 
@@ -62,6 +67,8 @@ async function searchFilesByCode(queryCode) {
   const drive = getDriveService();
   const allFiles = await listFilesRecursive(drive, folderId);
   const normalizedQuery = queryCode.trim().toUpperCase();
+
+  console.log(`🔍 Searching ${allFiles.length} files in Drive folder for: "${normalizedQuery}"`);
 
   const matches = [];
   for (const file of allFiles) {
@@ -187,7 +194,7 @@ async function startBot() {
     if (m.type !== 'notify') return;
 
     for (const msg of m.messages) {
-      if (!msg.message || msg.key.fromMe) continue;
+      if (!msg.message) continue;
 
       const remoteJid = msg.key.remoteJid;
       if (!remoteJid) continue;
@@ -200,7 +207,7 @@ async function startBot() {
       const queryCode = text.trim();
       if (!queryCode) continue;
 
-      console.log(`📩 Received message from ${remoteJid}: "${queryCode}"`);
+      console.log(`📩 Received message from ${remoteJid} (fromMe: ${msg.key.fromMe}): "${queryCode}"`);
 
       try {
         const results = await searchFilesByCode(queryCode);
@@ -220,11 +227,11 @@ async function startBot() {
         }
 
         await sock.sendMessage(remoteJid, { text: reply });
-        console.log(`📤 Replied to ${remoteJid}`);
+        console.log(`📤 Successfully sent reply to ${remoteJid}`);
       } catch (err) {
-        console.error('Drive Search Error:', err);
+        console.error('❌ Drive Search Error:', err);
         await sock.sendMessage(remoteJid, {
-          text: '❌ An error occurred while searching Google Drive. Please try again later.'
+          text: '❌ An error occurred while searching Google Drive. Please check logs.'
         });
       }
     }
