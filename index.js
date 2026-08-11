@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, makeInMemoryStore } = require('@whiskeysockets/baileys');
 const { google } = require('googleapis');
 const http = require('http');
 const pino = require('pino');
@@ -8,6 +8,9 @@ const path = require('path');
 let latestQR = null;
 let isConnected = false;
 let currentSock = null;
+
+// Baileys In-Memory Store to automatically resolve LIDs (@lid) to Phone Numbers (@s.whatsapp.net)
+const store = makeInMemoryStore({ logger: pino({ level: 'silent' }) });
 
 // ─── Google Drive Helper ───────────────────────────────────────────────────
 function getDriveService() {
@@ -203,6 +206,7 @@ async function startBot() {
     syncFullHistory: false
   });
 
+  store.bind(sock.ev);
   currentSock = sock;
 
   sock.ev.on('creds.update', saveCreds);
@@ -250,6 +254,7 @@ async function startBot() {
       if (!queryCode) continue;
 
       console.log(`📩 Received message from ${remoteJid}: "${queryCode}"`);
+      console.log(`📋 FULL MSG KEYS: ${JSON.stringify(msg.key)}`);
 
       try {
         // Mark message as read
@@ -271,10 +276,26 @@ async function startBot() {
           reply = lines.join('\n');
         }
 
-        // Send reply directly to the chat remoteJid
-        console.log(`📤 Sending message to: ${remoteJid}`);
-        await sock.sendMessage(remoteJid, { text: reply }, { quoted: msg });
-        console.log(`✅ Successfully delivered reply to ${remoteJid}`);
+        // Find candidate JIDs from msg.key and store
+        const candidates = new Set();
+        candidates.add(remoteJid);
+        if (msg.key.participant) candidates.add(msg.key.participant);
+        if (msg.key.remoteJidAlt) candidates.add(msg.key.remoteJidAlt);
+
+        // Try mapping contact from Baileys store
+        if (store.contacts[remoteJid]?.id) {
+          candidates.add(store.contacts[remoteJid].id);
+        }
+
+        for (const jid of candidates) {
+          console.log(`📤 Sending reply to candidate JID: ${jid}`);
+          try {
+            await sock.sendMessage(jid, { text: reply }, { quoted: msg });
+            console.log(`✅ Successfully sent reply to: ${jid}`);
+          } catch (sendErr) {
+            console.log(`⚠️ Send failed for ${jid}: ${sendErr.message}`);
+          }
+        }
       } catch (err) {
         console.error('❌ Drive Search / Send Error:', err);
       }
