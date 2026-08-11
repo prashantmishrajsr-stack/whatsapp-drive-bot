@@ -22,7 +22,6 @@ function getDriveService() {
     throw new Error(`Invalid GOOGLE_SERVICE_ACCOUNT_JSON formatting: ${e.message}`);
   }
 
-  // Ensure private_key handles linebreaks correctly
   const privateKey = credentials.private_key 
     ? credentials.private_key.replace(/\\n/g, '\n') 
     : '';
@@ -226,13 +225,14 @@ async function startBot() {
           reply = lines.join('\n');
         }
 
-        await sock.sendMessage(remoteJid, { text: reply });
-        console.log(`📤 Successfully sent reply to ${remoteJid}`);
+        // Quoting the original message ensures WhatsApp routes the reply directly into the conversation thread
+        await sock.sendMessage(remoteJid, { text: reply }, { quoted: msg });
+        console.log(`📤 Successfully sent quoted reply to ${remoteJid}`);
       } catch (err) {
         console.error('❌ Drive Search Error:', err);
         await sock.sendMessage(remoteJid, {
           text: '❌ An error occurred while searching Google Drive. Please check logs.'
-        });
+        }, { quoted: msg });
       }
     }
   });
