@@ -1,7 +1,10 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const { google } = require('googleapis');
-const qrcode = require('qrcode-terminal');
+const http = require('http');
 const pino = require('pino');
+
+let latestQR = null;
+let isConnected = false;
 
 // ─── Google Drive Helper ───────────────────────────────────────────────────
 function getDriveService() {
@@ -73,6 +76,76 @@ async function searchFilesByCode(queryCode) {
   return matches;
 }
 
+// ─── Web Server for Displaying Clean QR Code ──────────────────────────────
+const PORT = process.env.PORT || 8000;
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+
+  if (isConnected) {
+    res.end(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>WhatsApp Bot</title>
+        <style>
+          body { font-family: sans-serif; text-align: center; padding: 50px; background: #0f172a; color: white; }
+          .card { background: #1e293b; padding: 40px; border-radius: 16px; display: inline-block; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+          h1 { color: #22c55e; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>✅ WhatsApp Bot Connected & Active!</h1>
+          <p>Your bot is logged in and ready to receive messages.</p>
+        </div>
+      </body>
+      </html>
+    `);
+  } else if (latestQR) {
+    const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(latestQR)}`;
+    res.end(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Scan WhatsApp QR Code</title>
+        <meta http-equiv="refresh" content="15">
+        <style>
+          body { font-family: sans-serif; text-align: center; padding: 40px; background: #0f172a; color: white; }
+          .card { background: #1e293b; padding: 30px; border-radius: 16px; display: inline-block; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+          img { border-radius: 12px; margin: 20px 0; padding: 10px; background: white; }
+          p { color: #94a3b8; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h2>📱 Scan QR Code with WhatsApp</h2>
+          <p>Open WhatsApp on your phone → Linked Devices → Link a Device</p>
+          <img src="${qrImageUrl}" alt="WhatsApp QR Code" />
+          <p><small>Page auto-refreshes every 15 seconds</small></p>
+        </div>
+      </body>
+      </html>
+    `);
+  } else {
+    res.end(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>WhatsApp Bot</title>
+        <meta http-equiv="refresh" content="3">
+      </head>
+      <body style="font-family: sans-serif; text-align: center; padding: 50px; background: #0f172a; color: white;">
+        <h2>⏳ Starting WhatsApp Bot... Please wait.</h2>
+      </body>
+      </html>
+    `);
+  }
+});
+
+server.listen(PORT, () => {
+  console.log(`🌐 Web server running on port ${PORT}`);
+});
+
 // ─── Baileys WhatsApp Bot ──────────────────────────────────────────────────
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -89,20 +162,21 @@ async function startBot() {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      console.log('\n==================================================');
-      console.log('📱 SCAN THIS QR CODE WITH YOUR WHATSAPP (LINKED DEVICES):');
-      console.log('==================================================\n');
-      qrcode.generate(qr, { small: true });
-      console.log('\n==================================================\n');
+      latestQR = qr;
+      isConnected = false;
+      console.log('📱 New QR code generated. Open the Railway Web URL to scan!');
     }
 
     if (connection === 'close') {
+      isConnected = false;
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
       console.log('Connection closed. Reconnecting...', shouldReconnect);
       if (shouldReconnect) {
         setTimeout(startBot, 3000);
       }
     } else if (connection === 'open') {
+      latestQR = null;
+      isConnected = true;
       console.log('==================================================');
       console.log('✅ WHATSAPP BOT IS CONNECTED & READY TO RECEIVE MESSAGES!');
       console.log('==================================================');
@@ -118,7 +192,6 @@ async function startBot() {
       const remoteJid = msg.key.remoteJid;
       if (!remoteJid) continue;
 
-      // Extract message text from all formats
       const text = msg.message.conversation ||
                    msg.message.extendedTextMessage?.text ||
                    msg.message.imageMessage?.caption ||
@@ -158,5 +231,4 @@ async function startBot() {
   });
 }
 
-// Start the bot
 startBot().catch(console.error);
